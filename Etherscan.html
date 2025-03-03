@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chain Revenue and Balances Tracker</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+    h1, h2 {
+      color: #333;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 1em;
+      margin-bottom: 20px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-bottom: 20px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      background-color: #f2f2f2;
+    }
+    p, li {
+      font-size: 1.1em;
+    }
+    ul {
+      list-style-type: disc;
+      margin-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Chain Revenue and Balances Tracker</h1>
+  <p>
+    This application tracks all incoming ETH transactions to the target address 
+    <strong>0x09C7bAD99688a55a2e83644BFAed09e62bDcCcBA</strong> 
+    (representing chain revenue) and shows the current native token balances for the monitored addresses.
+  </p>
+  <p>The monitored addresses for balance tracking are:</p>
+  <ul>
+    <li>0x4200000000000000000000000000000000000019</li>
+    <li>0x420000000000000000000000000000000000001a</li>
+    <li>0x4200000000000000000000000000000000000011</li>
+  </ul>
+  <button id="loadBtn">Load Transactions and Balances</button>
+  <div id="output"></div>
+
+  <script>
+    /********************************************************
+     *                  CONFIGURATION                       *
+     ********************************************************/
+    // Your Etherscan API key (replace with your real key):
+    const etherscanApiKey = "W7R8DNAY8KIBRJK1CA6TS2XVMSFSDAYM82";
+
+    // Etherscan endpoint:
+    // Usually it's https://api.etherscan.io/api for Mainnet
+    const etherscanApiBase = "https://api.basescan.org/api";
+
+    // Define the target address (incoming transactions to this address will be tracked)
+    const targetAddress = '0x09c7bad99688a55a2e83644bfaed09e62bdcccba'.toLowerCase();
+
+    // Define all monitored addresses (including the target)
+    const monitoredAddresses = [
+      '0x4200000000000000000000000000000000000019',
+      //'0x420000000000000000000000000000000000001a',
+      //'0x4200000000000000000000000000000000000011',
+      //'0x09c7bad99688a55a2e83644bfaed09e62bdcccba'
+    ].map(addr => addr.toLowerCase());
+
+    // Exclude the target address from the balance calculation
+    const balanceAddresses = monitoredAddresses.filter(addr => addr !== targetAddress);
+
+    // For clarity
+    const WEI_PER_ETH = BigInt("1000000000000000000");
+
+
+    /********************************************************
+     *     PAGINATE ALL INTERNAL TXS FOR A GIVEN ADDRESS    *
+     ********************************************************/
+    /**
+     * Paginate through *all* internal transactions for `address` using Etherscan.
+     * We'll fetch subsequent pages until we get an empty result set.
+     * 
+     * @param {string} address - The address whose internal txs we want.
+     * @returns {Promise<Array>} All internal transactions (not yet filtered by "to" field).
+     */
+    async function fetchAllInternalTx(address) {
+      let allTxs = [];
+      let page = 1;
+      // each page fetches up to 'pageSize' transactions
+      const pageSize = 10000; // Etherscan typically allows up to 10000 in one call.
+
+      while (true) {
+        // Build the query
+        const url = new URL(etherscanApiBase);
+        url.searchParams.set("module", "account");
+        url.searchParams.set("action", "txlistinternal");
+        url.searchParams.set("address", address);
+        url.searchParams.set("startblock", "0");
+        url.searchParams.set("endblock", "99999999");
+        url.searchParams.set("page", String(page));
+        url.searchParams.set("offset", String(pageSize));
+        url.searchParams.set("sort", "asc");
+        url.searchParams.set("apikey", etherscanApiKey);
+
+        // Fetch
+        const resp = await fetch(url.toString());
+        const data = await resp.json();
+
+        // If we got an error or no more data, break
+        if (data.status !== "1" || !data.result || data.result.length === 0) {
+          break;
+        }
+
+        // Accumulate
+        allTxs = allTxs.concat(data.result);
+        page++;
+      }
+
+      return allTxs;
+    }
+
+    /**
+     * Fetch ONLY the internal transactions that actually go *to* the target address.
+     * @returns {Promise<Array>}
+     */
+    async function fetchTransactionsForTarget() {
+      // 1) Get ALL internal txs for that address
+      const allInternalTxs = await fetchAllInternalTx(targetAddress);
+      // 2) Filter to keep only those subcalls whose "to" matches the target
+      return allInternalTxs.filter(tx => tx.to && tx.to.toLowerCase() === targetAddress);
+    }
+
+    /********************************************************
+     *         FETCH CURRENT NATIVE BALANCE (ETH)           *
+     ********************************************************/
+    /**
+     * Fetch the current native token (ETH) balance for a given address via Etherscan.
+     * 
+     * @param {string} address - The address to fetch the balance for.
+     * @returns {Promise<{address: string, balance: BigInt}>}
+     */
+    async function fetchBalanceFor(address) {
+      const url = new URL(etherscanApiBase);
+      url.searchParams.set("module", "account");
+      url.searchParams.set("action", "balance");
+      url.searchParams.set("address", address);
+      url.searchParams.set("apikey", etherscanApiKey);
+
+      try {
+        const resp = await fetch(url.toString());
+        const data = await resp.json();
+        // data.result is a string of the wei balance
+        return { address, balance: BigInt(data.result) };
+      } catch (error) {
+        console.error("Error fetching balance for", address, error);
+        return { address, balance: BigInt(0) };
+      }
+    }
+
+
+    /********************************************************
+     *            MAIN LOGIC / EVENT HANDLER                *
+     ********************************************************/
+    document.getElementById('loadBtn').addEventListener('click', async () => {
+      const outputEl = document.getElementById('output');
+      outputEl.innerHTML = '<p>Loading transactions and balances...</p>';
+
+      try {
+        // 1) Query all incoming transactions
+        // 2) Query balances for monitored addresses
+        const [transactions, monitoredBalances] = await Promise.all([
+          fetchTransactionsForTarget(),
+          Promise.all(balanceAddresses.map(fetchBalanceFor))
+        ]);
+
+        // Build a table of incoming transactions
+        let totalRevenueWei = BigInt(0);
+        let txTable = `
+          <table>
+            <tr>
+              <th>From</th>
+              <th>To</th>
+              <th>Value (ETH)</th>
+            </tr>
+        `;
+        for (const tx of transactions) {
+          const valueWei = BigInt(tx.value);
+          totalRevenueWei += valueWei;
+          const ethValue = Number(valueWei) / 1e18;
+          txTable += `
+            <tr>
+              <td>${tx.from}</td>
+              <td>${tx.to}</td>
+              <td>${ethValue}</td>
+            </tr>
+          `;
+        }
+        txTable += "</table>";
+
+        // Convert total to ETH
+        const totalRevenueEth = Number(totalRevenueWei) / 1e18;
+
+        // Build monitored balances summary
+        let balancesHtml = "<h2>Current Balances for Monitored Addresses</h2><ul>";
+        let totalMonitoredWei = BigInt(0);
+
+        for (const b of monitoredBalances) {
+          totalMonitoredWei += b.balance;
+          const ethBalance = Number(b.balance) / 1e18;
+          balancesHtml += `<li>${b.address}: ${ethBalance} ETH</li>`;
+        }
+        balancesHtml += "</ul>";
+
+        const totalMonitoredEth = Number(totalMonitoredWei) / 1e18;
+        balancesHtml += `<p><strong>Aggregated Monitored Balance: ${totalMonitoredEth} ETH</strong></p>`;
+
+        // Combine everything into the final output
+        const absoluteHtml = `
+          <h2>Absolute Total ETH</h2>
+          <p><strong>${totalMonitoredEth} ETH</strong></p>
+        `;
+
+        let outputHtml = `
+          <h2>Incoming Transactions to ${targetAddress}</h2>
+          <p>Total Transactions: ${transactions.length}</p>
+          <p>Total Revenue from Incoming Transactions: ${totalRevenueEth} ETH</p>
+          ${txTable}
+          ${balancesHtml}
+          ${absoluteHtml}
+        `;
+
+        outputEl.innerHTML = outputHtml;
+
+      } catch (error) {
+        console.error("Error:", error);
+        outputEl.innerHTML = '<p>Error loading data.</p>';
+      }
+    });
+  </script>
+</body>
+</html>
