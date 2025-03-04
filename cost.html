@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>ETH Incoming Transfers Tracker</title>
+  </head>
+  <body>
+    <h1>ETH Incoming Transfers Tracker</h1>
+    <button id="fetchBtn">Fetch Data</button>
+    <div id="results"></div>
+
+    <script>
+      // Etherscan API configuration:
+      // Using the "txlist" endpoint as described in the docs.
+      const apiKey = "14N8SWJQQFIPKX1NHEPG2MESEY7VHWDSRW";
+      const baseUrl = "https://api-sepolia.etherscan.io/api";
+
+      // List of receiving addresses
+      const receivingAddresses = [
+        "0x50e9347B06a53654ffde349a713baeaEE7ff0618",
+        "0x993489c49a6921C68feC206f5Eeb52Be7f929F47"
+      ];
+
+      // Only include transactions where the sender is this address:
+      const filterFromAddress = "0x5ce8089cdb16dfba625F4Aaf473DD093eEff3fBE";
+
+      // Function to fetch transactions for a given address using the txlist endpoint.
+      // This returns both sent and received transactions.
+      function fetchTransactions(address) {
+        const url = `${baseUrl}?module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&page=1&offset=10000&sort=asc&apikey=${apiKey}`;
+        return fetch(url)
+          .then(response => response.json())
+          .then(data => {
+            if (data.status === "1") {
+              return data.result;
+            } else {
+              console.error("Error for address", address, data.message);
+              return [];
+            }
+          })
+          .catch(err => {
+            console.error("Error fetching transactions for", address, err);
+            return [];
+          });
+      }
+
+      async function processAddresses() {
+        const resultsDiv = document.getElementById("results");
+        resultsDiv.innerHTML = "Loading data...";
+        // Clear previous results
+        resultsDiv.innerHTML = "";
+        for (const receivingAddress of receivingAddresses) {
+          // Fetch transactions for the receiving address (both sent and received)
+          const txs = await fetchTransactions(receivingAddress);
+          // Filter for incoming transactions:
+          // - "to" equals receivingAddress (case-insensitive)
+          // - "from" equals filterFromAddress (case-insensitive)
+          // - "value" > 0 (nonzero ETH transferred)
+          const incomingTxs = txs.filter(tx =>
+            tx.to && tx.to.toLowerCase() === receivingAddress.toLowerCase() &&
+            tx.from && tx.from.toLowerCase() === filterFromAddress.toLowerCase() &&
+            BigInt(tx.value) > 0n
+          );
+          const totalTxCount = incomingTxs.length;
+          // Sum the total transferred value in wei from all matching transactions
+          let totalValueWei = incomingTxs.reduce((sum, tx) => {
+            try {
+              return sum + BigInt(tx.value);
+            } catch (e) {
+              console.error("Error processing tx:", e);
+              return sum;
+            }
+          }, 0n);
+          // Convert from wei to ETH (1 ETH = 1e18 wei)
+          const totalValueEth = Number(totalValueWei) / 1e18;
+          // Display the results for this receiving address
+          const resultEl = document.createElement("div");
+          resultEl.textContent = `Receiving Address: ${receivingAddress} - Incoming Transactions from ${filterFromAddress}: ${totalTxCount} - Total ETH Transferred: ${totalValueEth.toFixed(6)}`;
+          resultsDiv.appendChild(resultEl);
+        }
+      }
+
+      document.getElementById("fetchBtn").addEventListener("click", processAddresses);
+    </script>
+  </body>
+</html>
