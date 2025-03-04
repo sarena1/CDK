@@ -41,7 +41,9 @@
 <body>
   <h1>ETH Transfer Tracker</h1>
   <p>
-    This application tracks incoming ETH transactions to the following target addresses:
+    This application tracks incoming ETH transactions from 
+    <strong>0x5ce8089cdb16dfba625F4Aaf473DD093eEff3fBE</strong> 
+    to the following target addresses:
   </p>
   <ul>
     <li>0x50e9347B06a53654ffde349a713baeaEE7ff0618</li>
@@ -60,6 +62,9 @@
     // Etherscan endpoint for Sepolia
     const etherscanApiBase = "https://api-sepolia.etherscan.io/api";
 
+    // Define the source address (transactions must be from this address)
+    const sourceAddress = '0x5ce8089cdb16dfba625F4Aaf473DD093eEff3fBE'.toLowerCase();
+
     // Define the target addresses
     const targetAddresses = [
       '0x50e9347B06a53654ffde349a713baeaEE7ff0618',
@@ -70,51 +75,48 @@
     const WEI_PER_ETH = BigInt("1000000000000000000");
 
     /********************************************************
-     *     PAGINATE ALL TXS FOR TARGET ADDRESSES            *
+     *     PAGINATE ALL TXS FOR A GIVEN ADDRESS             *
      ********************************************************/
     /**
-     * Fetch transactions for target addresses
+     * Fetch transactions for a specific address with filtering
+     * @param {string} address - The address to fetch transactions for
      * @returns {Promise<Array>} Filtered transactions
      */
     async function fetchTransactions() {
       let allTxs = [];
+      let page = 1;
+      const pageSize = 10000;
 
-      // Fetch for each target address
-      for (const targetAddress of targetAddresses) {
-        let page = 1;
-        const pageSize = 10000;
+      while (true) {
+        // Build the query
+        const url = new URL(etherscanApiBase);
+        url.searchParams.set("module", "account");
+        url.searchParams.set("action", "txlist");
+        url.searchParams.set("address", sourceAddress);
+        url.searchParams.set("startblock", "0");
+        url.searchParams.set("endblock", "99999999");
+        url.searchParams.set("page", String(page));
+        url.searchParams.set("offset", String(pageSize));
+        url.searchParams.set("sort", "asc");
+        url.searchParams.set("apikey", etherscanApiKey);
 
-        while (true) {
-          // Build the query
-          const url = new URL(etherscanApiBase);
-          url.searchParams.set("module", "account");
-          url.searchParams.set("action", "txlist");
-          url.searchParams.set("address", targetAddress);
-          url.searchParams.set("startblock", "0");
-          url.searchParams.set("endblock", "99999999");
-          url.searchParams.set("page", String(page));
-          url.searchParams.set("offset", String(pageSize));
-          url.searchParams.set("sort", "asc");
-          url.searchParams.set("apikey", etherscanApiKey);
+        // Fetch
+        const resp = await fetch(url.toString());
+        const data = await resp.json();
 
-          // Fetch
-          const resp = await fetch(url.toString());
-          const data = await resp.json();
-
-          // If we got an error or no more data, break
-          if (data.status !== "1" || !data.result || data.result.length === 0) {
-            break;
-          }
-
-          // Filter transactions (non-zero value and to target addresses)
-          const filteredTxs = data.result.filter(tx => 
-            targetAddresses.includes(tx.to.toLowerCase()) && 
-            BigInt(tx.value) > BigInt(0)
-          );
-
-          allTxs = allTxs.concat(filteredTxs);
-          page++;
+        // If we got an error or no more data, break
+        if (data.status !== "1" || !data.result || data.result.length === 0) {
+          break;
         }
+
+        // Filter transactions
+        const filteredTxs = data.result.filter(tx => 
+          tx.from.toLowerCase() === sourceAddress && 
+          targetAddresses.includes(tx.to.toLowerCase())
+        );
+
+        allTxs = allTxs.concat(filteredTxs);
+        page++;
       }
 
       return allTxs;
@@ -155,7 +157,7 @@
       outputEl.innerHTML = '<p>Loading transactions and balances...</p>';
 
       try {
-        // 1) Query transactions to target addresses
+        // 1) Query transactions from source to targets
         // 2) Query balances for target addresses
         const [transactions, monitoredBalances] = await Promise.all([
           fetchTransactions(),
@@ -206,7 +208,7 @@
         balancesHtml += `<p><strong>Aggregated Balance: ${totalMonitoredEth.toFixed(4)} ETH</strong></p>`;
 
         let outputHtml = `
-          <h2>Incoming Transactions to Target Addresses</h2>
+          <h2>Incoming Transactions from ${sourceAddress}</h2>
           <p>Total Transactions: ${transactions.length}</p>
           <p>Total Value of Transactions: ${totalRevenueEth.toFixed(4)} ETH</p>
           ${txTable}
