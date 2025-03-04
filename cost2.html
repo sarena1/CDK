@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>ETH Transfer Tracker</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+    h1, h2 {
+      color: #333;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 1em;
+      margin-bottom: 20px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-bottom: 20px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      background-color: #f2f2f2;
+    }
+    p, li {
+      font-size: 1.1em;
+    }
+    ul {
+      list-style-type: disc;
+      margin-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>ETH Transfer Tracker</h1>
+  <p>
+    This application tracks incoming ETH transactions to the following target addresses:
+  </p>
+  <ul>
+    <li>0x50e9347B06a53654ffde349a713baeaEE7ff0618</li>
+    <li>0x993489c49a6921C68feC206f5Eeb52Be7f929F47</li>
+  </ul>
+  <button id="loadBtn">Load Transactions and Balances</button>
+  <div id="output"></div>
+
+  <script>
+    /********************************************************
+     *                  CONFIGURATION                       *
+     ********************************************************/
+    // Etherscan API key
+    const etherscanApiKey = "14N8SWJQQFIPKX1NHEPG2MESEY7VHWDSRW";
+
+    // Etherscan endpoint for Sepolia
+    const etherscanApiBase = "https://api-sepolia.etherscan.io/api";
+
+    // Define the target addresses
+    const targetAddresses = [
+      '0x50e9347B06a53654ffde349a713baeaEE7ff0618',
+      '0x993489c49a6921C68feC206f5Eeb52Be7f929F47'
+    ].map(addr => addr.toLowerCase());
+
+    // For clarity
+    const WEI_PER_ETH = BigInt("1000000000000000000");
+
+    /********************************************************
+     *     PAGINATE ALL TXS FOR TARGET ADDRESSES            *
+     ********************************************************/
+    /**
+     * Fetch transactions for target addresses
+     * @returns {Promise<Array>} Filtered transactions
+     */
+    async function fetchTransactions() {
+      let allTxs = [];
+
+      // Fetch for each target address
+      for (const targetAddress of targetAddresses) {
+        let page = 1;
+        const pageSize = 10000;
+
+        while (true) {
+          // Build the query
+          const url = new URL(etherscanApiBase);
+          url.searchParams.set("module", "account");
+          url.searchParams.set("action", "txlist");
+          url.searchParams.set("address", targetAddress);
+          url.searchParams.set("startblock", "0");
+          url.searchParams.set("endblock", "99999999");
+          url.searchParams.set("page", String(page));
+          url.searchParams.set("offset", String(pageSize));
+          url.searchParams.set("sort", "asc");
+          url.searchParams.set("apikey", etherscanApiKey);
+
+          // Fetch
+          const resp = await fetch(url.toString());
+          const data = await resp.json();
+
+          // If we got an error or no more data, break
+          if (data.status !== "1" || !data.result || data.result.length === 0) {
+            break;
+          }
+
+          // Filter transactions (non-zero value and to target addresses)
+          const filteredTxs = data.result.filter(tx => 
+            targetAddresses.includes(tx.to.toLowerCase()) && 
+            BigInt(tx.value) > BigInt(0)
+          );
+
+          allTxs = allTxs.concat(filteredTxs);
+          page++;
+        }
+      }
+
+      return allTxs;
+    }
+
+    /********************************************************
+     *         FETCH CURRENT NATIVE BALANCE (ETH)           *
+     ********************************************************/
+    /**
+     * Fetch the current native token (ETH) balance for a given address via Etherscan.
+     * 
+     * @param {string} address - The address to fetch the balance for.
+     * @returns {Promise<{address: string, balance: BigInt}>}
+     */
+    async function fetchBalanceFor(address) {
+      const url = new URL(etherscanApiBase);
+      url.searchParams.set("module", "account");
+      url.searchParams.set("action", "balance");
+      url.searchParams.set("address", address);
+      url.searchParams.set("apikey", etherscanApiKey);
+
+      try {
+        const resp = await fetch(url.toString());
+        const data = await resp.json();
+        // data.result is a string of the wei balance
+        return { address, balance: BigInt(data.result) };
+      } catch (error) {
+        console.error("Error fetching balance for", address, error);
+        return { address, balance: BigInt(0) };
+      }
+    }
+
+    /********************************************************
+     *            MAIN LOGIC / EVENT HANDLER                *
+     ********************************************************/
+    document.getElementById('loadBtn').addEventListener('click', async () => {
+      const outputEl = document.getElementById('output');
+      outputEl.innerHTML = '<p>Loading transactions and balances...</p>';
+
+      try {
+        // 1) Query transactions to target addresses
+        // 2) Query balances for target addresses
+        const [transactions, monitoredBalances] = await Promise.all([
+          fetchTransactions(),
+          Promise.all(targetAddresses.map(fetchBalanceFor))
+        ]);
+
+        // Build a table of incoming transactions
+        let totalRevenueWei = BigInt(0);
+        let txTable = `
+          <table>
+            <tr>
+              <th>From</th>
+              <th>To</th>
+              <th>Value (ETH)</th>
+              <th>Transaction Hash</th>
+            </tr>
+        `;
+        for (const tx of transactions) {
+          const valueWei = BigInt(tx.value);
+          totalRevenueWei += valueWei;
+          const ethValue = Number(valueWei) / 1e18;
+          txTable += `
+            <tr>
+              <td>${tx.from}</td>
+              <td>${tx.to}</td>
+              <td>${ethValue.toFixed(4)}</td>
+              <td><a href="https://sepolia.etherscan.io/tx/${tx.hash}" target="_blank">${tx.hash}</a></td>
+            </tr>
+          `;
+        }
+        txTable += "</table>";
+
+        // Convert total to ETH
+        const totalRevenueEth = Number(totalRevenueWei) / 1e18;
+
+        // Build monitored balances summary
+        let balancesHtml = "<h2>Current Balances for Target Addresses</h2><ul>";
+        let totalMonitoredWei = BigInt(0);
+
+        for (const b of monitoredBalances) {
+          totalMonitoredWei += b.balance;
+          const ethBalance = Number(b.balance) / 1e18;
+          balancesHtml += `<li>${b.address}: ${ethBalance.toFixed(4)} ETH</li>`;
+        }
+        balancesHtml += "</ul>";
+
+        const totalMonitoredEth = Number(totalMonitoredWei) / 1e18;
+        balancesHtml += `<p><strong>Aggregated Balance: ${totalMonitoredEth.toFixed(4)} ETH</strong></p>`;
+
+        let outputHtml = `
+          <h2>Incoming Transactions to Target Addresses</h2>
+          <p>Total Transactions: ${transactions.length}</p>
+          <p>Total Value of Transactions: ${totalRevenueEth.toFixed(4)} ETH</p>
+          ${txTable}
+          ${balancesHtml}
+        `;
+
+        outputEl.innerHTML = outputHtml;
+
+      } catch (error) {
+        console.error("Error:", error);
+        outputEl.innerHTML = '<p>Error loading data: ' + error.message + '</p>';
+      }
+    });
+  </script>
+</body>
+</html>
